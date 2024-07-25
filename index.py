@@ -8,7 +8,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # Define states for conversation
-ASK_MEMBERSHIP, ASK_FIRST_NAME, ASK_MIDDLE_NAME, ASK_LAST_NAME, ASK_ID, ASK_BATCH, CONFIRM_INFO, ASK_FEEDBACK, THANK_YOU = range(9)
+ASK_MEMBERSHIP, ASK_FIRST_NAME, ASK_MIDDLE_NAME, ASK_LAST_NAME, ASK_ID, ASK_BATCH, CONFIRM_INFO, ASK_FEEDBACK, THANK_YOU, SELECT_TIME_RANGE = range(10)
 
 # URLs and IDs
 GROUP_URL = "https://t.me/SCOME_ARSI"
@@ -136,6 +136,17 @@ async def ask_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         **context.user_data
     })
 
+    # Send feedback to the channel immediately
+    feedback_text = (
+        f"Timestamp: {datetime.now(pytz.timezone('Africa/Nairobi'))}\n"
+        f"Membership: {context.user_data['membership']}\n"
+        f"Full Name: {context.user_data['first_name']} {context.user_data['middle_name']} {context.user_data['last_name']}\n"
+        f"ID Number: {context.user_data['id_number']}\n"
+        f"Batch: {context.user_data['batch']}\n"
+        f"Feedback: {context.user_data['feedback']}"
+    )
+    await context.bot.send_message(chat_id=CHANNEL_ID, text=feedback_text)
+
     keyboard = [
         [InlineKeyboardButton("Yes", callback_data='yes')],
         [InlineKeyboardButton("No", callback_data='no')]
@@ -159,9 +170,29 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text('Feedback collection cancelled. Have a nice day!')
     return ConversationHandler.END
 
-async def send_feedback_to_channel(feedback_text: str):
-    # Send the feedback to the channel
-    await application.bot.send_message(chat_id=CHANNEL_ID, text=feedback_text)
+def get_feedback_text(start_date: datetime) -> str:
+    filtered_feedback = [fb for fb in feedback_storage if fb['timestamp'] >= start_date]
+    feedback_text = '\n\n'.join([
+        f"Timestamp: {fb['timestamp']}\n"
+        f"Membership: {fb['membership']}\n"
+        f"Full Name: {fb['first_name']} {fb['middle_name']} {fb['last_name']}\n"
+        f"ID Number: {fb['id_number']}\n"
+        f"Batch: {fb['batch']}\n"
+        f"Feedback: {fb['feedback']}"
+        for fb in filtered_feedback
+    ])
+
+    if not feedback_text:
+        feedback_text = "No feedback available for the selected time period."
+
+    return feedback_text
+
+async def send_feedback_to_recipient():
+    now = datetime.now(pytz.timezone('Africa/Nairobi'))
+    start_date = now - timedelta(days=1)
+    feedback_text = get_feedback_text(start_date)
+
+    await application.bot.send_message(chat_id=FEEDBACK_RECIPIENT_ID, text=feedback_text)
 
 async def send_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.message.from_user.id
@@ -171,91 +202,80 @@ async def send_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return ConversationHandler.END
 
     keyboard = [
-        [InlineKeyboardButton("Today's Feedback", callback_data='today')],
-        [InlineKeyboardButton("Last 3 Days Feedback", callback_data='last_3_days')],
-        [InlineKeyboardButton("Last 7 Days Feedback", callback_data='last_7_days')],
-        [InlineKeyboardButton("Last 10 Days Feedback", callback_data='last_10_days')],
-        [InlineKeyboardButton("Last 15 Days Feedback", callback_data='last_15_days')],
-        [InlineKeyboardButton("Last 30 Days Feedback", callback_data='last_30_days')],
-        [InlineKeyboardButton("Last 2 Months Feedback", callback_data='last_2_months')],
-        [InlineKeyboardButton("All Time Feedback", callback_data='all_time')]
+        [InlineKeyboardButton("Past 24 hours", callback_data='24h')],
+        [InlineKeyboardButton("Past 3 days", callback_data='3d')],
+        [InlineKeyboardButton("Past week", callback_data='1w')],
+        [InlineKeyboardButton("Past 10 days", callback_data='10d')],
+        [InlineKeyboardButton("Past 2 weeks", callback_data='2w')],
+        [InlineKeyboardButton("Past 3 weeks", callback_data='3w')],
+        [InlineKeyboardButton("Past month", callback_data='1m')],
+        [InlineKeyboardButton("Past 2 months", callback_data='2m')],
+        [InlineKeyboardButton("Past 6 months", callback_data='6m')],
+        [InlineKeyboardButton("Lifetime", callback_data='lifetime')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Please choose the feedback you want to retrieve:", reply_markup=reply_markup)
-    return ConversationHandler.END
+    await update.message.reply_text("Select the time range for the feedback:", reply_markup=reply_markup)
+    return SELECT_TIME_RANGE
 
-async def handle_feedback_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def send_selected_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
 
-    filter_type = query.data
     now = datetime.now(pytz.timezone('Africa/Nairobi'))
-
-    if filter_type == 'today':
+    if query.data == '24h':
         start_date = now - timedelta(days=1)
-    elif filter_type == 'last_3_days':
+    elif query.data == '3d':
         start_date = now - timedelta(days=3)
-    elif filter_type == 'last_7_days':
-        start_date = now - timedelta(days=7)
-    elif filter_type == 'last_10_days':
+    elif query.data == '1w':
+        start_date = now - timedelta(weeks=1)
+    elif query.data == '10d':
         start_date = now - timedelta(days=10)
-    elif filter_type == 'last_15_days':
-        start_date = now - timedelta(days=15)
-    elif filter_type == 'last_30_days':
+    elif query.data == '2w':
+        start_date = now - timedelta(weeks=2)
+    elif query.data == '3w':
+        start_date = now - timedelta(weeks=3)
+    elif query.data == '1m':
         start_date = now - timedelta(days=30)
-    elif filter_type == 'last_2_months':
+    elif query.data == '2m':
         start_date = now - timedelta(days=60)
-    elif filter_type == 'all_time':
-        start_date = datetime.min
-    else:
-        await query.edit_message_text("Invalid option selected.")
-        return ConversationHandler.END
+    elif query.data == '6m':
+        start_date = now - timedelta(days=180)
+    elif query.data == 'lifetime':
+        start_date = datetime.min.replace(tzinfo=pytz.timezone('Africa/Nairobi'))
 
-    filtered_feedback = [fb for fb in feedback_storage if fb['timestamp'] >= start_date]
-    feedback_text = '\n\n'.join([
-        f"Timestamp: {fb['timestamp']}\n"
-        f"Membership: {fb['membership']}\n"
-        f"Full Name: {fb['first_name']} {fb['middle']}{fb['last_name']}\n"
-        f"ID Number: {fb['id_number']}\n"
-        f"Batch: {fb['batch']}\n"
-        f"Feedback: {fb['feedback']}"
-        for fb in filtered_feedback
-    ])
-
-    if not feedback_text:
-        feedback_text = "No feedback available for the selected period."
-
-    await query.edit_message_text(f"Feedback for {filter_type.replace('_', ' ')}:\n\n{feedback_text}")
+    feedback_text = get_feedback_text(start_date)
+    await query.edit_message_text(feedback_text)
     return ConversationHandler.END
 
-def main() -> None:
-    application = Application.builder().token("7064344482:AAHHA7p9ldTmwTpbk6wjBP6nafxJTVsfLys").build()
+# Set up the application
+application = Application.builder().token("7064344482:AAHHA7p9ldTmwTpbk6wjBP6nafxJTVsfLys").build()
 
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
-        states={
-            ASK_MEMBERSHIP: [CallbackQueryHandler(ask_membership)],
-            ASK_FIRST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_first_name)],
-            ASK_MIDDLE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_middle_name)],
-            ASK_LAST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_last_name)],
-            ASK_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_id)],
-            ASK_BATCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_batch)],
-            CONFIRM_INFO: [CallbackQueryHandler(confirm_info)],
-            ASK_FEEDBACK: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_feedback)],
-            THANK_YOU: [CallbackQueryHandler(thank_you)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel)]
-    )
+# Set up the conversation handler
+conv_handler = ConversationHandler(
+    entry_points=[CommandHandler('start', start)],
+    states={
+        ASK_MEMBERSHIP: [CallbackQueryHandler(ask_membership)],
+        ASK_FIRST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_first_name)],
+        ASK_MIDDLE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_middle_name)],
+        ASK_LAST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_last_name)],
+        ASK_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_id)],
+        ASK_BATCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_batch)],
+        CONFIRM_INFO: [CallbackQueryHandler(confirm_info)],
+        ASK_FEEDBACK: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_feedback)],
+        THANK_YOU: [CallbackQueryHandler(thank_you)],
+        SELECT_TIME_RANGE: [CallbackQueryHandler(send_selected_feedback)]
+    },
+    fallbacks=[CommandHandler('cancel', cancel)]
+)
 
-    application.add_handler(conv_handler)
-    application.add_handler(CommandHandler('send_feedback', send_feedback))
-    application.add_handler(CallbackQueryHandler(handle_feedback_request, pattern='^(today|last_3_days|last_7_days|last_10_days|last_15_days|last_30_days|last_2_months|all_time)$'))
+# Add handlers to the application
+application.add_handler(conv_handler)
+application.add_handler(CommandHandler('send_feedback', send_feedback))
 
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(send_feedback_to_channel, 'cron', hour=23, minute=59, args=['Your daily feedback summary'])
-    scheduler.start()
+# Set up the scheduler
+scheduler = AsyncIOScheduler(timezone=pytz.timezone('Africa/Nairobi'))
+scheduler.add_job(send_feedback_to_recipient, trigger='cron', hour=23, minute=59)
+scheduler.start()
 
-    application.run_polling()
-
-if __name__ == '__main__':
-    main()
+# Start the bot
+application.run_polling()
